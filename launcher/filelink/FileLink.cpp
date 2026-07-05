@@ -34,39 +34,11 @@
 
 #include <DesktopServices.h>
 
-#include <sys.h>
-
-#if defined Q_OS_WIN32
-#include "WindowsConsole.h"
-#endif
-
-// Snippet from https://github.com/gulrak/filesystem#using-it-as-single-file-header
-
-#ifdef __APPLE__
-#include <Availability.h>  // for deployment target to support pre-catalina targets without std::fs
-#endif                     // __APPLE__
-
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || (defined(__cplusplus) && __cplusplus >= 201703L)) && defined(__has_include)
-#if __has_include(<filesystem>) && (!defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || __MAC_OS_X_VERSION_MIN_REQUIRED >= 101500)
-#define GHC_USE_STD_FS
 #include <filesystem>
 namespace fs = std::filesystem;
-#endif  // MacOS min version check
-#endif  // Other OSes version check
-
-#ifndef GHC_USE_STD_FS
-#include <ghc/filesystem.hpp>
-namespace fs = ghc::filesystem;
-#endif
 
 FileLinkApp::FileLinkApp(int& argc, char** argv) : QCoreApplication(argc, argv), socket(new QLocalSocket(this))
 {
-#if defined Q_OS_WIN32
-    // attach the parent console
-    if (AttachWindowsConsole()) {
-        consoleAttached = true;
-    }
-#endif
     setOrganizationName(BuildConfig.LAUNCHER_NAME);
     setOrganizationDomain(BuildConfig.LAUNCHER_DOMAIN);
     setApplicationName(BuildConfig.LAUNCHER_NAME + "FileLink");
@@ -128,7 +100,7 @@ void FileLinkApp::joinServer(QString server)
                 qDebug() << ("The connection was closed by the peer. ");
                 break;
             default:
-                qDebug() << "The following error occurred: " << socket.errorString();
+                qDebug() << "The following error occurred:" << socket.errorString();
         }
     });
 
@@ -249,13 +221,4 @@ FileLinkApp::~FileLinkApp()
     qDebug() << "link program shutting down";
     // Shut down logger by setting the logger function to nothing
     qInstallMessageHandler(nullptr);
-
-#if defined Q_OS_WIN32
-    // Detach from Windows console
-    if (consoleAttached) {
-        fclose(stdout);
-        fclose(stdin);
-        fclose(stderr);
-    }
-#endif
 }

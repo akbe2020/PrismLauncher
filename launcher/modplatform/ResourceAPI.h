@@ -4,7 +4,7 @@
 /*
  *  Prism Launcher - Minecraft Launcher
  *  Copyright (C) 2022 Sefa Eyeoglu <contact@scrumplex.net>
- *  Copyright (c) 2023 Trial97 <alexandru.tripon97@gmail.com>
+ *  Copyright (c) 2023-2025 Trial97 <alexandru.tripon97@gmail.com>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -44,10 +44,12 @@
 
 #include <list>
 #include <optional>
+#include <utility>
 
 #include "../Version.h"
 
 #include "modplatform/ModIndex.h"
+#include "modplatform/ResourceType.h"
 #include "tasks/Task.h"
 
 /* Simple class with a common interface for interacting with APIs */
@@ -66,6 +68,13 @@ class ResourceAPI {
         QString readable_name;
     };
 
+    template <typename T>
+    struct Callback {
+        std::function<void(T&)> on_succeed;
+        std::function<void(const QString& reason, int network_error_code)> on_fail;
+        std::function<void()> on_abort;
+    };
+
     struct SearchArgs {
         ModPlatform::ResourceType type{};
         int offset = 0;
@@ -73,121 +82,78 @@ class ResourceAPI {
         std::optional<QString> search;
         std::optional<SortingMethod> sorting;
         std::optional<ModPlatform::ModLoaderTypes> loaders;
-        std::optional<std::list<Version>> versions;
-        std::optional<QString> side;
+        std::optional<std::vector<Version>> versions;
+        std::optional<ModPlatform::Side> side;
         std::optional<QStringList> categoryIds;
-        bool openSource;
-    };
-    struct SearchCallbacks {
-        std::function<void(QJsonDocument&)> on_succeed;
-        std::function<void(QString const& reason, int network_error_code)> on_fail;
-        std::function<void()> on_abort;
+        bool openSource{};
     };
 
     struct VersionSearchArgs {
-        ModPlatform::IndexedPack pack;
+        ModPlatform::IndexedPack::Ptr pack;
 
-        std::optional<std::list<Version>> mcVersions;
+        std::optional<std::vector<Version>> mcVersions;
         std::optional<ModPlatform::ModLoaderTypes> loaders;
-
-        VersionSearchArgs(VersionSearchArgs const&) = default;
-        void operator=(VersionSearchArgs other)
-        {
-            pack = other.pack;
-            mcVersions = other.mcVersions;
-            loaders = other.loaders;
-        }
-    };
-    struct VersionSearchCallbacks {
-        std::function<void(QJsonDocument&, ModPlatform::IndexedPack)> on_succeed;
-        std::function<void(QString const& reason, int network_error_code)> on_fail;
+        ModPlatform::ResourceType resourceType;
+        bool includeChangelog{};
     };
 
     struct ProjectInfoArgs {
-        ModPlatform::IndexedPack pack;
-
-        ProjectInfoArgs(ProjectInfoArgs const&) = default;
-        void operator=(ProjectInfoArgs other) { pack = other.pack; }
-    };
-    struct ProjectInfoCallbacks {
-        std::function<void(QJsonDocument&, const ModPlatform::IndexedPack&)> on_succeed;
-        std::function<void(QString const& reason)> on_fail;
-        std::function<void()> on_abort;
+        ModPlatform::IndexedPack::Ptr pack;
     };
 
     struct DependencySearchArgs {
         ModPlatform::Dependency dependency;
         Version mcVersion;
         ModPlatform::ModLoaderTypes loader;
-    };
-
-    struct DependencySearchCallbacks {
-        std::function<void(QJsonDocument&, const ModPlatform::Dependency&)> on_succeed;
-        std::function<void(QString const& reason, int network_error_code)> on_fail;
+        bool includeChangelog{};
     };
 
    public:
     /** Gets a list of available sorting methods for this API. */
-    [[nodiscard]] virtual auto getSortingMethods() const -> QList<SortingMethod> = 0;
+    virtual auto getSortingMethods() const -> QList<SortingMethod> = 0;
 
    public slots:
-    [[nodiscard]] virtual Task::Ptr searchProjects(SearchArgs&&, SearchCallbacks&&) const
-    {
-        qWarning() << "TODO: ResourceAPI::searchProjects";
-        return nullptr;
-    }
-    [[nodiscard]] virtual Task::Ptr getProject([[maybe_unused]] QString addonId,
-                                               [[maybe_unused]] std::shared_ptr<QByteArray> response) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProject";
-        return nullptr;
-    }
-    [[nodiscard]] virtual Task::Ptr getProjects([[maybe_unused]] QStringList addonIds,
-                                                [[maybe_unused]] std::shared_ptr<QByteArray> response) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProjects";
-        return nullptr;
-    }
+    virtual Task::Ptr searchProjects(SearchArgs&&, Callback<QList<ModPlatform::IndexedPack::Ptr>>&&) const;
 
-    [[nodiscard]] virtual Task::Ptr getProjectInfo(ProjectInfoArgs&&, ProjectInfoCallbacks&&) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProjectInfo";
-        return nullptr;
-    }
-    [[nodiscard]] virtual Task::Ptr getProjectVersions(VersionSearchArgs&&, VersionSearchCallbacks&&) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProjectVersions";
-        return nullptr;
-    }
+    virtual std::pair<Task::Ptr, QByteArray*> getProject(QString addonId, bool askRetry = true) const;
+    virtual std::pair<Task::Ptr, QByteArray*> getProjects(QStringList addonIds) const = 0;
 
-    [[nodiscard]] virtual Task::Ptr getDependencyVersion(DependencySearchArgs&&, DependencySearchCallbacks&&) const
-    {
-        qWarning() << "TODO";
-        return nullptr;
-    }
+    virtual Task::Ptr getProjectInfo(ProjectInfoArgs&&, Callback<ModPlatform::IndexedPack::Ptr>&&, bool askRetry = true) const;
+    Task::Ptr getProjectVersions(VersionSearchArgs&& args, Callback<QVector<ModPlatform::IndexedVersion>>&& callbacks) const;
+    virtual Task::Ptr getDependencyVersion(DependencySearchArgs&&, Callback<ModPlatform::IndexedVersion>&&) const;
 
    protected:
-    [[nodiscard]] inline QString debugName() const { return "External resource API"; }
+    inline QString debugName() const { return "External resource API"; }
 
-    [[nodiscard]] inline QString mapMCVersionToModrinth(Version v) const
-    {
-        static const QString preString = " Pre-Release ";
-        auto verStr = v.toString();
+    QString mapMCVersionToModrinth(Version v) const;
 
-        if (verStr.contains(preString)) {
-            verStr.replace(preString, "-pre");
-        }
-        verStr.replace(" ", "-");
-        return verStr;
-    }
+    QString getGameVersionsString(std::vector<Version> mcVersions) const;
 
-    [[nodiscard]] inline QString getGameVersionsString(std::list<Version> mcVersions) const
-    {
-        QString s;
-        for (auto& ver : mcVersions) {
-            s += QString("\"%1\",").arg(mapMCVersionToModrinth(ver));
-        }
-        s.remove(s.length() - 1, 1);  // remove last comma
-        return s;
-    }
+   public:
+    virtual auto getSearchURL(const SearchArgs& args) const -> std::optional<QString> = 0;
+    virtual auto getInfoURL(const QString& id) const -> std::optional<QString> = 0;
+    virtual auto getVersionsURL(const VersionSearchArgs& args) const -> std::optional<QString> = 0;
+    virtual auto getDependencyURL(const DependencySearchArgs& args) const -> std::optional<QString> = 0;
+
+    /** Functions to load data into a pack.
+     *
+     *  Those are needed for the same reason as documentToArray, and NEED to be re-implemented in the same way.
+     */
+
+    virtual void loadIndexedPack(ModPlatform::IndexedPack&, QJsonObject&) const = 0;
+    virtual ModPlatform::IndexedVersion loadIndexedPackVersion(QJsonObject& obj, ModPlatform::ResourceType) const = 0;
+
+    /** Converts a JSON document to a common array format.
+     *
+     *  This is needed so that different providers, with different JSON structures, can be parsed
+     *  uniformally. You NEED to re-implement this if you intend on using the default callbacks.
+     */
+    virtual QJsonArray documentToArray(QJsonDocument& obj) const = 0;
+
+    /** Functions to load data into a pack.
+     *
+     *  Those are needed for the same reason as documentToArray, and NEED to be re-implemented in the same way.
+     */
+
+    virtual void loadExtraPackInfo(ModPlatform::IndexedPack&, QJsonObject&) const = 0;
 };

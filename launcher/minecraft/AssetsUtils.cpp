@@ -52,6 +52,7 @@
 
 #include "Application.h"
 #include "net/NetRequest.h"
+#include "update/AssetUpdateTask.h"
 
 namespace {
 QSet<QString> collectPathsFromDir(QString dirPath)
@@ -103,7 +104,7 @@ bool loadAssetsIndexJson(const QString& assetsId, const QString& path, AssetsInd
     // Try to open the file and fail if we can't.
     // TODO: We should probably report this error to the user.
     if (!file.open(QIODevice::ReadOnly)) {
-        qCritical() << "Failed to read assets index file" << path;
+        qCritical() << "Failed to read assets index file" << path << "error:" << file.errorString();
         return false;
     }
     index.id = assetsId;
@@ -159,7 +160,7 @@ bool loadAssetsIndexJson(const QString& assetsId, const QString& path, AssetsInd
             if (key == "hash") {
                 object.hash = value.toString();
             } else if (key == "size") {
-                object.size = value.toDouble();
+                object.size = value.toLongLong();
             }
         }
 
@@ -298,7 +299,8 @@ QString AssetObject::getLocalPath()
 
 QUrl AssetObject::getUrl()
 {
-    return BuildConfig.RESOURCE_BASE + getRelPath();
+    auto resourceURL = AssetUpdateTask::resourceUrl();
+    return resourceURL + getRelPath();
 }
 
 QString AssetObject::getRelPath()

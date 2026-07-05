@@ -50,7 +50,6 @@
 #include "ResourceDownloadTask.h"
 
 #include "minecraft/MinecraftInstance.h"
-#include "minecraft/PackProfile.h"
 
 #include "ui/dialogs/ResourceDownloadDialog.h"
 
@@ -59,19 +58,18 @@ namespace ResourceDownload {
 ModPage::ModPage(ModDownloadDialog* dialog, BaseInstance& instance) : ResourcePage(dialog, instance)
 {
     connect(m_ui->resourceFilterButton, &QPushButton::clicked, this, &ModPage::filterMods);
-    connect(m_ui->packView, &QListView::doubleClicked, this, &ModPage::onResourceSelected);
 }
 
-void ModPage::setFilterWidget(unique_qobject_ptr<ModFilterWidget>& widget)
+void ModPage::setFilterWidget(std::unique_ptr<ModFilterWidget>& widget)
 {
-    if (m_filter_widget)
+    if (m_filter_widget) {
         disconnect(m_filter_widget.get(), nullptr, nullptr, nullptr);
-
-    auto old = m_ui->splitter->replaceWidget(0, widget.get());
-    // because we replaced the widget we also need to delete it
-    if (old) {
-        delete old;
     }
+
+    auto* old = m_ui->splitter->replaceWidget(0, widget.get());
+    // because we replaced the widget we also need to delete it
+
+    delete old;
 
     m_filter_widget.swap(widget);
 
@@ -115,10 +113,11 @@ QMap<QString, QString> ModPage::urlHandlers() const
 
 void ModPage::addResourceToPage(ModPlatform::IndexedPack::Ptr pack,
                                 ModPlatform::IndexedVersion& version,
-                                const std::shared_ptr<ResourceFolderModel> base_model)
+                                ResourceFolderModel* baseModel,
+                                QString downloadReason)
 {
-    bool is_indexed = !APPLICATION->settings()->get("ModMetadataDisabled").toBool();
-    m_model->addPack(pack, version, base_model, is_indexed);
+    bool isIndexed = !APPLICATION->settings()->get("ModMetadataDisabled").toBool();
+    m_model->addPack(pack, version, baseModel, isIndexed, downloadReason);
 }
 
 }  // namespace ResourceDownload

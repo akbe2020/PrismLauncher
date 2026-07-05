@@ -43,7 +43,9 @@
 #include "MetadataHandler.h"
 #include "QObjectPtr.h"
 
-enum class ResourceType {
+class BaseInstance;
+
+enum class ResourceType : std::uint8_t {
     UNKNOWN,     //!< Indicates an unspecified resource type.
     ZIPFILE,     //!< The resource is a zip file containing the resource's class files.
     SINGLEFILE,  //!< The resource is a single file (not a zip file).
@@ -51,16 +53,35 @@ enum class ResourceType {
     LITEMOD,     //!< The resource is a litemod
 };
 
-enum class ResourceStatus {
-    INSTALLED,      // Both JAR and Metadata are present
-    NOT_INSTALLED,  // Only the Metadata is present
-    NO_METADATA,    // Only the JAR is present
-    UNKNOWN,        // Default status
+QDebug operator<<(QDebug debug, ResourceType type);
+
+enum class ResourceStatus : std::uint8_t {
+    Installed,     // Both JAR and Metadata are present
+    NotInstalled,  // Only the Metadata is present
+    NoMetadata,    // Only the JAR is present
+    Unknown,       // Default status
 };
 
-enum class SortType { NAME, DATE, VERSION, ENABLED, PACK_FORMAT, PROVIDER, SIZE, SIDE, MC_VERSIONS, LOADERS, RELEASE_TYPE };
+QDebug operator<<(QDebug debug, ResourceStatus status);
 
-enum class EnableAction { ENABLE, DISABLE, TOGGLE };
+enum class SortType : std::uint8_t {
+    Name,
+    Date,
+    Version,
+    Enabled,
+    PackFormat,
+    Provider,
+    Size,
+    Side,
+    McVersions,
+    Loaders,
+    ReleaseType,
+    Requires,
+    RequiredBy,
+    Filename,
+};
+
+enum class EnableAction : std::uint8_t { ENABLE, DISABLE, TOGGLE };
 
 /** General class for managed resources. It mirrors a file in disk, with some more info
  *  for display and house-keeping purposes.
@@ -72,50 +93,57 @@ class Resource : public QObject {
     Q_DISABLE_COPY(Resource)
    public:
     using Ptr = shared_qobject_ptr<Resource>;
-    using WeakPtr = QPointer<Resource>;
 
     Resource(QObject* parent = nullptr);
-    Resource(QFileInfo file_info);
-    Resource(QString file_path) : Resource(QFileInfo(file_path)) {}
+    Resource(QFileInfo fileInfo);
+    Resource(const QString& filePath) : Resource(QFileInfo(filePath)) {}
 
     ~Resource() override = default;
 
-    void setFile(QFileInfo file_info);
+    void setFile(QFileInfo fileInfo);
     void parseFile();
 
-    [[nodiscard]] auto fileinfo() const -> QFileInfo { return m_file_info; }
-    [[nodiscard]] auto dateTimeChanged() const -> QDateTime { return m_changed_date_time; }
-    [[nodiscard]] auto internal_id() const -> QString { return m_internal_id; }
-    [[nodiscard]] auto type() const -> ResourceType { return m_type; }
-    [[nodiscard]] bool enabled() const { return m_enabled; }
-    [[nodiscard]] auto getOriginalFileName() const -> QString;
-    [[nodiscard]] QString sizeStr() const { return m_size_str; }
-    [[nodiscard]] qint64 sizeInfo() const { return m_size_info; }
+    auto fileinfo() const -> QFileInfo { return m_file_info; }
+    auto dateTimeChanged() const -> QDateTime { return m_changed_date_time; }
+    auto internalId() const -> QString { return m_internal_id; }
+    auto type() const -> ResourceType { return m_type; }
+    bool enabled() const { return m_enabled; }
+    auto getOriginalFileName() const -> QString;
+    QString sizeStr() const { return m_size_str; }
+    qint64 sizeInfo() const { return m_size_info; }
 
-    [[nodiscard]] virtual auto name() const -> QString;
-    [[nodiscard]] virtual bool valid() const { return m_type != ResourceType::UNKNOWN; }
+    virtual auto name() const -> QString;
+    virtual bool valid() const { return m_type != ResourceType::UNKNOWN; }
 
-    [[nodiscard]] auto status() const -> ResourceStatus { return m_status; };
-    [[nodiscard]] auto metadata() -> std::shared_ptr<Metadata::ModStruct> { return m_metadata; }
-    [[nodiscard]] auto metadata() const -> std::shared_ptr<const Metadata::ModStruct> { return m_metadata; }
-    [[nodiscard]] auto provider() const -> QString;
-    [[nodiscard]] virtual auto homepage() const -> QString;
+    auto status() const -> ResourceStatus { return m_status; };
+    auto metadata() -> std::shared_ptr<Metadata::ModStruct> { return m_metadata; }
+    auto metadata() const -> std::shared_ptr<const Metadata::ModStruct> { return m_metadata; }
+    auto provider() const -> QString;
+    virtual auto homepage() const -> QString;
 
     void setStatus(ResourceStatus status) { m_status = status; }
     void setMetadata(std::shared_ptr<Metadata::ModStruct>&& metadata);
     void setMetadata(const Metadata::ModStruct& metadata) { setMetadata(std::make_shared<Metadata::ModStruct>(metadata)); }
+
+    /**
+     * Returns compatibility issues with the resource and the instance.
+     * This is initially empty, and may be updated when calling updateIssues.
+     */
+    QStringList issues() const;
+    void updateIssues(const BaseInstance* inst);
+    bool hasIssues() const { return !m_issues.empty(); }
 
     /** Compares two Resources, for sorting purposes, considering a ascending order, returning:
      *  > 0: 'this' comes after 'other'
      *  = 0: 'this' is equal to 'other'
      *  < 0: 'this' comes before 'other'
      */
-    [[nodiscard]] virtual int compare(Resource const& other, SortType type = SortType::NAME) const;
+    virtual int compare(const Resource& other, SortType type = SortType::Name) const;
 
     /** Returns whether the given filter should filter out 'this' (false),
      *  or if such filter includes the Resource (true).
      */
-    [[nodiscard]] virtual bool applyFilter(QRegularExpression filter) const;
+    virtual bool applyFilter(QRegularExpression filter) const;
 
     /** Changes the enabled property, according to 'action'.
      *
@@ -123,10 +151,10 @@ class Resource : public QObject {
      */
     bool enable(EnableAction action);
 
-    [[nodiscard]] auto shouldResolve() const -> bool { return !m_is_resolving && !m_is_resolved; }
-    [[nodiscard]] auto isResolving() const -> bool { return m_is_resolving; }
-    [[nodiscard]] auto isResolved() const -> bool { return m_is_resolved; }
-    [[nodiscard]] auto resolutionTicket() const -> int { return m_resolution_ticket; }
+    auto shouldResolve() const -> bool { return !m_is_resolving && !m_is_resolved; }
+    auto isResolving() const -> bool { return m_is_resolving; }
+    auto isResolved() const -> bool { return m_is_resolved; }
+    auto resolutionTicket() const -> int { return m_resolution_ticket; }
 
     void setResolving(bool resolving, int resolutionTicket)
     {
@@ -135,11 +163,11 @@ class Resource : public QObject {
     }
 
     // Delete all files of this resource.
-    auto destroy(const QDir& index_dir, bool preserve_metadata = false, bool attempt_trash = true) -> bool;
+    auto destroy(const QDir& indexDir, bool preserveMetadata = false, bool attemptTrash = true) -> bool;
     // Delete the metadata only.
-    auto destroyMetadata(const QDir& index_dir) -> void;
+    auto destroyMetadata(const QDir& indexDir) -> void;
 
-    [[nodiscard]] auto isSymLink() const -> bool { return m_file_info.isSymLink(); }
+    auto isSymLink() const -> bool { return m_file_info.isSymLink(); }
 
     /**
      * @brief Take a instance path, checks if the file pointed to by the resource is a symlink or under a symlink in that instance
@@ -148,9 +176,9 @@ class Resource : public QObject {
      * @return true
      * @return false
      */
-    [[nodiscard]] bool isSymLinkUnder(const QString& instPath) const;
+    bool isSymLinkUnder(const QString& instPath) const;
 
-    [[nodiscard]] bool isMoreThanOneHardLink() const;
+    bool isMoreThanOneHardLink() const;
 
    protected:
     /* The file corresponding to this resource. */
@@ -167,12 +195,14 @@ class Resource : public QObject {
     ResourceType m_type = ResourceType::UNKNOWN;
 
     /* Installation status of the resource. */
-    ResourceStatus m_status = ResourceStatus::UNKNOWN;
+    ResourceStatus m_status = ResourceStatus::Unknown;
 
     std::shared_ptr<Metadata::ModStruct> m_metadata = nullptr;
 
     /* Whether the resource is enabled (e.g. shows up in the game) or not. */
     bool m_enabled = true;
+
+    QList<const char*> m_issues;
 
     /* Used to keep trach of pending / concluded actions on the resource. */
     bool m_is_resolving = false;

@@ -12,10 +12,10 @@
 
 #include <QtConcurrent>
 
-DataMigrationTask::DataMigrationTask(const QString& sourcePath, const QString& targetPath, const IPathMatcher::Ptr pathMatcher)
+DataMigrationTask::DataMigrationTask(const QString& sourcePath, const QString& targetPath, Filter pathMatcher)
     : Task(), m_sourcePath(sourcePath), m_targetPath(targetPath), m_pathMatcher(pathMatcher), m_copy(sourcePath, targetPath)
 {
-    m_copy.matcher(m_pathMatcher.get()).whitelist(true);
+    m_copy.matcher(m_pathMatcher).whitelist(true);
 }
 
 void DataMigrationTask::executeTask()
@@ -37,11 +37,7 @@ void DataMigrationTask::dryRunFinished()
     disconnect(&m_copyFutureWatcher, &QFutureWatcher<bool>::finished, this, &DataMigrationTask::dryRunFinished);
     disconnect(&m_copyFutureWatcher, &QFutureWatcher<bool>::canceled, this, &DataMigrationTask::dryRunAborted);
 
-#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
     if (!m_copyFuture.isValid() || !m_copyFuture.result()) {
-#else
-    if (!m_copyFuture.result()) {
-#endif
         emitFailed(tr("Failed to scan source path."));
         return;
     }
@@ -67,7 +63,7 @@ void DataMigrationTask::dryRunFinished()
 
 void DataMigrationTask::dryRunAborted()
 {
-    emitFailed(tr("Aborted"));
+    emitAborted();
 }
 
 void DataMigrationTask::copyFinished()
@@ -75,11 +71,7 @@ void DataMigrationTask::copyFinished()
     disconnect(&m_copyFutureWatcher, &QFutureWatcher<bool>::finished, this, &DataMigrationTask::copyFinished);
     disconnect(&m_copyFutureWatcher, &QFutureWatcher<bool>::canceled, this, &DataMigrationTask::copyAborted);
 
-#if (QT_VERSION >= QT_VERSION_CHECK(6, 0, 0))
     if (!m_copyFuture.isValid() || !m_copyFuture.result()) {
-#else
-    if (!m_copyFuture.result()) {
-#endif
         emitFailed(tr("Some paths could not be copied!"));
         return;
     }
@@ -89,5 +81,5 @@ void DataMigrationTask::copyFinished()
 
 void DataMigrationTask::copyAborted()
 {
-    emitFailed(tr("Aborted"));
+    emitAborted();
 }

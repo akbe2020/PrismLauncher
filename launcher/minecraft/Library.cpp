@@ -149,7 +149,7 @@ QList<Net::NetRequest::Ptr> Library::getDownloads(const RuntimeContext& runtimeC
         if (sha1.size()) {
             auto dl = Net::ApiDownload::makeCached(url, entry, options);
             dl->addValidator(new Net::ChecksumValidator(QCryptographicHash::Sha1, sha1));
-            qDebug() << "Checksummed Download for:" << rawName().serialize() << "storage:" << storage << "url:" << url;
+            qDebug() << "Checksummed Download for:" << rawName().serialize() << "storage:" << storage << "url:" << url << "expected sha1:" << sha1;
             out.append(dl);
         } else {
             out.append(Net::ApiDownload::makeCached(url, entry, options));
@@ -242,13 +242,13 @@ bool Library::isActive(const RuntimeContext& runtimeContext) const
     if (m_rules.empty()) {
         result = true;
     } else {
-        RuleAction ruleResult = Disallow;
+        Rule::Action ruleResult = Rule::Disallow;
         for (auto rule : m_rules) {
-            RuleAction temp = rule->apply(this, runtimeContext);
-            if (temp != Defer)
+            Rule::Action temp = rule.apply(runtimeContext);
+            if (temp != Rule::Defer)
                 ruleResult = temp;
         }
-        result = result && (ruleResult == Allow);
+        result = result && (ruleResult == Rule::Allow);
     }
     if (isNative()) {
         result = result && !getCompatibleNative(runtimeContext).isNull();

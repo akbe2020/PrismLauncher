@@ -43,9 +43,6 @@
 #include <FileSystem.h>
 #include <MMCZip.h>
 #include <io/stream_reader.h>
-#include <quazip/quazip.h>
-#include <quazip/quazipdir.h>
-#include <quazip/quazipfile.h>
 #include <tag_primitive.h>
 #include <tag_string.h>
 #include <sstream>
@@ -57,6 +54,7 @@
 
 #include "FileSystem.h"
 #include "PSaveFile.h"
+#include "archive/ArchiveReader.h"
 
 using std::nullopt;
 using std::optional;
@@ -155,18 +153,23 @@ QByteArray serializeLevelDat(nbt::tag_compound* levelInfo)
     return val;
 }
 
-QString getLevelDatFromFS(const QFileInfo& file)
+QString getDatFromFS(const QFileInfo& root, QString file)
 {
-    QDir worldDir(file.filePath());
-    if (!file.isDir() || !worldDir.exists("level.dat")) {
+    QDir worldDir(root.filePath());
+    if (!root.isDir() || !worldDir.exists(file)) {
         return QString();
     }
-    return worldDir.absoluteFilePath("level.dat");
+    return worldDir.absoluteFilePath(file);
 }
 
-QByteArray getLevelDatDataFromFS(const QFileInfo& file)
+QString getLevelDatFromFS(const QFileInfo& file)
 {
-    auto fullFilePath = getLevelDatFromFS(file);
+    return getDatFromFS(file, "level.dat");
+}
+
+QByteArray getDatDataFromFS(const QFileInfo& root, QString file)
+{
+    auto fullFilePath = getDatFromFS(root, file);
     if (fullFilePath.isNull()) {
         return QByteArray();
     }
@@ -175,6 +178,16 @@ QByteArray getLevelDatDataFromFS(const QFileInfo& file)
         return QByteArray();
     }
     return f.readAll();
+}
+
+QByteArray getLevelDatDataFromFS(const QFileInfo& file)
+{
+    return getDatDataFromFS(file, "level.dat");
+}
+
+QByteArray getWorldGenDataFromFS(const QFileInfo& file)
+{
+    return getDatDataFromFS(file, "data/minecraft/world_gen_settings.dat");
 }
 
 bool putLevelDatDataToFS(const QFileInfo& file, QByteArray& data)
@@ -198,22 +211,6 @@ bool putLevelDatDataToFS(const QFileInfo& file, QByteArray& data)
     return f.commit();
 }
 
-int64_t calculateWorldSize(const QFileInfo& file)
-{
-    if (file.isFile() && file.suffix() == "zip") {
-        return file.size();
-    } else if (file.isDir()) {
-        QDirIterator it(file.absoluteFilePath(), QDir::Files, QDirIterator::Subdirectories);
-        int64_t total = 0;
-        while (it.hasNext()) {
-            it.next();
-            total += it.fileInfo().size();
-        }
-        return total;
-    }
-    return -1;
-}
-
 World::World(const QFileInfo& file)
 {
     repath(file);
@@ -223,7 +220,6 @@ void World::repath(const QFileInfo& file)
 {
     m_containerFile = file;
     m_folderName = file.fileName();
-    m_size = calculateWorldSize(file);
     if (file.isFile() && file.suffix() == "zip") {
         m_iconFile = QString();
         readFromZip(file);
@@ -248,49 +244,43 @@ bool World::resetIcon()
     return false;
 }
 
+int64_t loadSeed(QByteArray data);
+
 void World::readFromFS(const QFileInfo& file)
 {
     auto bytes = getLevelDatDataFromFS(file);
     if (bytes.isEmpty()) {
-        is_valid = false;
+        m_isValid = false;
         return;
     }
     loadFromLevelDat(bytes);
-    levelDatTime = file.lastModified();
+    m_levelDatTime = file.lastModified();
+    if (m_randomSeed == 0) {
+        bytes = getWorldGenDataFromFS(file);
+        if (!bytes.isEmpty()) {
+            m_randomSeed = loadSeed(bytes);
+        }
+    }
 }
 
 void World::readFromZip(const QFileInfo& file)
 {
-    QuaZip zip(file.absoluteFilePath());
-    is_valid = zip.open(QuaZip::mdUnzip);
-    if (!is_valid) {
-        return;
-    }
-    auto location = MMCZip::findFolderOfFileInZip(&zip, "level.dat");
-    is_valid = !location.isEmpty();
-    if (!is_valid) {
-        return;
-    }
-    m_containerOffsetPath = location;
-    QuaZipFile zippedFile(&zip);
-    // read the install profile
-    is_valid = zip.setCurrentFile(location + "level.dat");
-    if (!is_valid) {
-        return;
-    }
-    is_valid = zippedFile.open(QIODevice::ReadOnly);
-    QuaZipFileInfo64 levelDatInfo;
-    zippedFile.getFileInfo(&levelDatInfo);
-    auto modTime = levelDatInfo.getNTFSmTime();
-    if (!modTime.isValid()) {
-        modTime = levelDatInfo.dateTime;
-    }
-    levelDatTime = modTime;
-    if (!is_valid) {
-        return;
-    }
-    loadFromLevelDat(zippedFile.readAll());
-    zippedFile.close();
+    MMCZip::ArchiveReader r(file.absoluteFilePath());
+
+    m_isValid = false;
+    r.parse([this](MMCZip::ArchiveReader::File* file, bool& stop) {
+        const QString levelDat = "level.dat";
+        auto filePath = file->filename();
+        QFileInfo fi(filePath);
+        if (fi.fileName().compare(levelDat, Qt::CaseInsensitive) == 0) {
+            m_containerOffsetPath = filePath.chopped(levelDat.length());
+            m_levelDatTime = file->dateTime();
+            loadFromLevelDat(file->readAll());
+            m_isValid = true;
+            stop = true;
+        }
+        return true;
+    });
 }
 
 bool World::install(const QString& to, const QString& name)
@@ -301,10 +291,7 @@ bool World::install(const QString& to, const QString& name)
     }
     bool ok = false;
     if (m_containerFile.isFile()) {
-        QuaZip zip(m_containerFile.absoluteFilePath());
-        if (!zip.open(QuaZip::mdUnzip)) {
-            return false;
-        }
+        MMCZip::ArchiveReader zip(m_containerFile.absoluteFilePath());
         ok = !MMCZip::extractSubDir(&zip, m_containerOffsetPath, finalPath);
     } else if (m_containerFile.isDir()) {
         QString from = m_containerFile.filePath();
@@ -367,7 +354,7 @@ optional<QString> read_string(nbt::value& parent, const char* name)
             return nullopt;
         }
         auto& tag_str = namedValue.as<nbt::tag_string>();
-        return QString::fromStdString(tag_str.get());
+        return QString::fromUtf8(tag_str.get());
     } catch ([[maybe_unused]] const std::out_of_range& e) {
         // fallback for old world formats
         qWarning() << "String NBT tag" << name << "could not be found.";
@@ -426,11 +413,33 @@ GameType read_gametype(nbt::value& parent, const char* name)
 
 }  // namespace
 
+int64_t loadSeed(QByteArray data)
+{
+    auto levelData = parseLevelDat(data);
+    if (!levelData) {
+        return 0;
+    }
+
+    nbt::value* valPtr = nullptr;
+    try {
+        valPtr = &levelData->at("data");
+    } catch (const std::out_of_range&) {
+        return 0;
+    }
+    nbt::value& val = *valPtr;
+
+    try {
+        return read_long(val, "seed").value_or(0);
+    } catch (const std::out_of_range&) {
+    }
+    return 0;
+}
+
 void World::loadFromLevelDat(QByteArray data)
 {
     auto levelData = parseLevelDat(data);
     if (!levelData) {
-        is_valid = false;
+        m_isValid = false;
         return;
     }
 
@@ -438,21 +447,21 @@ void World::loadFromLevelDat(QByteArray data)
     try {
         valPtr = &levelData->at("Data");
     } catch (const std::out_of_range& e) {
-        qWarning() << "Unable to read NBT tags from " << m_folderName << ":" << e.what();
-        is_valid = false;
+        qWarning().nospace() << "Unable to read NBT tags from " << m_folderName << ": " << e.what();
+        m_isValid = false;
         return;
     }
     nbt::value& val = *valPtr;
 
-    is_valid = val.get_type() == nbt::tag_type::Compound;
-    if (!is_valid)
+    m_isValid = val.get_type() == nbt::tag_type::Compound;
+    if (!m_isValid)
         return;
 
     auto name = read_string(val, "LevelName");
     m_actualName = name ? *name : m_folderName;
 
     auto timestamp = read_long(val, "LastPlayed");
-    m_lastPlayed = timestamp ? QDateTime::fromMSecsSinceEpoch(*timestamp) : levelDatTime;
+    m_lastPlayed = timestamp ? QDateTime::fromMSecsSinceEpoch(*timestamp) : m_levelDatTime;
 
     m_gameType = read_gametype(val, "GameType");
 
@@ -490,7 +499,7 @@ bool World::replace(World& with)
 
 bool World::destroy()
 {
-    if (!is_valid)
+    if (!m_isValid)
         return false;
 
     if (FS::trash(m_containerFile.filePath()))
@@ -508,7 +517,7 @@ bool World::destroy()
 
 bool World::operator==(const World& other) const
 {
-    return is_valid == other.is_valid && folderName() == other.folderName();
+    return m_isValid == other.m_isValid && folderName() == other.folderName();
 }
 
 bool World::isSymLinkUnder(const QString& instPath) const
@@ -530,4 +539,9 @@ bool World::isMoreThanOneHardLink() const
         return FS::hardLinkCount(QDir(m_containerFile.absoluteFilePath()).filePath("level.dat")) > 1;
     }
     return FS::hardLinkCount(m_containerFile.absoluteFilePath()) > 1;
+}
+
+void World::setSize(int64_t size)
+{
+    m_size = size;
 }

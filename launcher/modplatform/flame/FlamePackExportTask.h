@@ -19,22 +19,26 @@
 
 #pragma once
 
-#include "BaseInstance.h"
 #include "MMCZip.h"
 #include "minecraft/MinecraftInstance.h"
 #include "modplatform/flame/FlameAPI.h"
 #include "tasks/Task.h"
 
+struct FlamePackExportOptions {
+    QString name;
+    QString version;
+    QString author;
+    bool optionalFiles;
+    MinecraftInstance* instance;
+    QString output;
+    MMCZip::FilterFileFunction filter;
+    int recommendedRAM;
+};
+
 class FlamePackExportTask : public Task {
     Q_OBJECT
    public:
-    FlamePackExportTask(const QString& name,
-                        const QString& version,
-                        const QString& author,
-                        bool optionalFiles,
-                        InstancePtr instance,
-                        const QString& output,
-                        MMCZip::FilterFunction filter);
+    FlamePackExportTask(FlamePackExportOptions&& options);
 
    protected:
     void executeTask() override;
@@ -45,13 +49,6 @@ class FlamePackExportTask : public Task {
     static const QStringList FILE_EXTENSIONS;
 
     // inputs
-    const QString name, version, author;
-    const bool optionalFiles;
-    const InstancePtr instance;
-    MinecraftInstance* mcInstance;
-    const QDir gameRoot;
-    const QString output;
-    const MMCZip::FilterFunction filter;
 
     struct ResolvedFile {
         int addonId;
@@ -70,9 +67,12 @@ class FlamePackExportTask : public Task {
         bool isMod;
     };
 
+    FlamePackExportOptions m_options;
+    QDir m_gameRoot;
+
     FlameAPI api;
 
-    QFileInfoList files;
+    QFileInfoList m_files;
     QMap<QString, HashInfo> pendingHashes{};
     QMap<QString, ResolvedFile> resolvedFiles{};
     Task::Ptr task;

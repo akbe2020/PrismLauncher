@@ -3,12 +3,12 @@
 #include <QtConcurrentRun>
 #include <memory>
 #include "FileSystem.h"
+#include "Filter.h"
 #include "NullInstance.h"
-#include "pathmatcher/RegexpMatcher.h"
 #include "settings/INISettingsObject.h"
 #include "tasks/Task.h"
 
-InstanceCopyTask::InstanceCopyTask(InstancePtr origInstance, const InstanceCopyPrefs& prefs)
+InstanceCopyTask::InstanceCopyTask(BaseInstance* origInstance, const InstanceCopyPrefs& prefs)
 {
     m_origInstance = origInstance;
     m_keepPlaytime = prefs.isKeepPlaytimeEnabled();
@@ -30,9 +30,8 @@ InstanceCopyTask::InstanceCopyTask(InstancePtr origInstance, const InstanceCopyP
     if (!filters.isEmpty()) {
         // Set regex filter:
         // FIXME: get this from the original instance type...
-        auto matcherReal = new RegexpMatcher(filters);
-        matcherReal->caseSensitive(false);
-        m_matcher.reset(matcherReal);
+        QRegularExpression regexp(filters, QRegularExpression::CaseInsensitiveOption);
+        m_matcher = Filters::regexp(regexp);
     }
 }
 
@@ -43,7 +42,7 @@ void InstanceCopyTask::executeTask()
     m_copyFuture = QtConcurrent::run(QThreadPool::globalInstance(), [this] {
         if (m_useClone) {
             FS::clone folderClone(m_origInstance->instanceRoot(), m_stagingPath);
-            folderClone.matcher(m_matcher.get());
+            folderClone.matcher(m_matcher);
 
             folderClone(true);
             setProgress(0, folderClone.totalCloned());
@@ -65,14 +64,13 @@ void InstanceCopyTask::executeTask()
 
                 savesCopy = std::make_unique<FS::copy>(FS::PathCombine(m_origInstance->gameRoot(), "saves"),
                                                        FS::PathCombine(staging_mc_dir, "saves"));
-                savesCopy->followSymlinks(true);
                 (*savesCopy)(true);
                 setProgress(0, savesCopy->totalCopied());
                 connect(savesCopy.get(), &FS::copy::fileCopied, [this](QString src) { setProgress(m_progress + 1, m_progressTotal); });
             }
             FS::create_link folderLink(m_origInstance->instanceRoot(), m_stagingPath);
             int depth = m_linkRecursively ? -1 : 0;  // we need to at least link the top level instead of the instance folder
-            folderLink.linkRecursively(true).setMaxDepth(depth).useHardLinks(m_useHardLinks).matcher(m_matcher.get());
+            folderLink.linkRecursively(true).setMaxDepth(depth).useHardLinks(m_useHardLinks).matcher(m_matcher);
 
             folderLink(true);
             setProgress(0, m_progressTotal + folderLink.totalToLink());
@@ -127,11 +125,11 @@ void InstanceCopyTask::executeTask()
             return !there_were_errors;
         }
         FS::copy folderCopy(m_origInstance->instanceRoot(), m_stagingPath);
-        folderCopy.followSymlinks(false).matcher(m_matcher.get());
+        folderCopy.matcher(m_matcher);
 
         folderCopy(true);
         setProgress(0, folderCopy.totalCopied());
-        connect(&folderCopy, &FS::copy::fileCopied, [this](QString src) { setProgress(m_progress + 1, m_progressTotal); });
+        connect(&folderCopy, &FS::copy::fileCopied, [this]() { setProgress(m_progress + 1, m_progressTotal); });
         return folderCopy();
     });
     connect(&m_copyFutureWatcher, &QFutureWatcher<bool>::finished, this, &InstanceCopyTask::copyFinished);
@@ -148,9 +146,9 @@ void InstanceCopyTask::copyFinished()
     }
 
     // FIXME: shouldn't this be able to report errors?
-    auto instanceSettings = std::make_shared<INISettingsObject>(FS::PathCombine(m_stagingPath, "instance.cfg"));
+    auto instanceSettings = std::make_unique<INISettingsObject>(FS::PathCombine(m_stagingPath, "instance.cfg"));
 
-    InstancePtr inst(new NullInstance(m_globalSettings, instanceSettings, m_stagingPath));
+    BaseInstance* inst(new NullInstance(m_globalSettings, std::move(instanceSettings), m_stagingPath));
     inst->setName(name());
     inst->setIconKey(m_instIcon);
     if (!m_keepPlaytime) {

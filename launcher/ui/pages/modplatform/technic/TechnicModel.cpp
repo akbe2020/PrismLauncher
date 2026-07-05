@@ -37,6 +37,7 @@
 #include "Application.h"
 #include "BuildConfig.h"
 #include "Json.h"
+#include "settings/SettingsObject.h"
 
 #include "net/ApiDownload.h"
 #include "ui/widgets/ProjectItem.h"
@@ -71,7 +72,7 @@ QVariant Technic::ListModel::data(const QModelIndex& index, int role) const
             if (m_logoMap.contains(pack.logoName)) {
                 return (m_logoMap.value(pack.logoName));
             }
-            QIcon icon = APPLICATION->getThemedIcon("screenshot-placeholder");
+            QIcon icon = QIcon::fromTheme("screenshot-placeholder");
             ((ListModel*)this)->requestLogo(pack.logoName, pack.logoUrl);
             return icon;
         }
@@ -89,8 +90,6 @@ QVariant Technic::ListModel::data(const QModelIndex& index, int role) const
             return pack.name;
         case UserDataTypes::DESCRIPTION:
             return pack.description;
-        case UserDataTypes::SELECTED:
-            return false;
         case UserDataTypes::INSTALLED:
             return false;
         default:
@@ -158,23 +157,25 @@ void Technic::ListModel::performSearch()
     if (!clientId.isEmpty()) {
         searchUrl += "?cid=" + clientId;
     }
-    netJob->addNetAction(Net::ApiDownload::makeByteArray(QUrl(searchUrl), response));
+    auto [action, response] = Net::ApiDownload::makeByteArray(QUrl(searchUrl));
+    netJob->addNetAction(action);
     jobPtr = netJob;
     jobPtr->start();
-    QObject::connect(netJob.get(), &NetJob::succeeded, this, &ListModel::searchRequestFinished);
-    QObject::connect(netJob.get(), &NetJob::failed, this, &ListModel::searchRequestFailed);
+    connect(netJob.get(), &NetJob::succeeded, this, [this, response] { searchRequestFinished(response); });
+    connect(netJob.get(), &NetJob::failed, this, &ListModel::searchRequestFailed);
 }
 
-void Technic::ListModel::searchRequestFinished()
+void Technic::ListModel::searchRequestFinished(QByteArray* responsePtr)
 {
+    // NOTE(TheKodeToad): moving the response out to avoid it from being destroyed by jobPtr.reset()
+    QByteArray response = std::move(*responsePtr);
     jobPtr.reset();
 
     QJsonParseError parse_error;
-    QJsonDocument doc = QJsonDocument::fromJson(*response, &parse_error);
+    QJsonDocument doc = QJsonDocument::fromJson(response, &parse_error);
     if (parse_error.error != QJsonParseError::NoError) {
-        qWarning() << "Error while parsing JSON response from Technic at " << parse_error.offset
-                   << " reason: " << parse_error.errorString();
-        qWarning() << *response;
+        qWarning() << "Error while parsing JSON response from Technic at" << parse_error.offset << "reason:" << parse_error.errorString();
+        qWarning() << response;
         return;
     }
 
@@ -193,7 +194,7 @@ void Technic::ListModel::searchRequestFinished()
                     if (pack.slug == "vanilla")
                         continue;
 
-                    auto rawURL = Json::ensureString(technicPackObject, "iconUrl", "null");
+                    auto rawURL = technicPackObject["iconUrl"].toString("null");
                     if (rawURL == "null") {
                         pack.logoUrl = "null";
                         pack.logoName = "null";
@@ -301,12 +302,12 @@ void Technic::ListModel::requestLogo(QString logo, QString url)
 
     auto fullPath = entry->getFullPath();
 
-    QObject::connect(job, &NetJob::succeeded, this, [this, logo, fullPath, job] {
+    connect(job, &NetJob::succeeded, this, [this, logo, fullPath, job] {
         job->deleteLater();
         logoLoaded(logo, fullPath);
     });
 
-    QObject::connect(job, &NetJob::failed, this, [this, logo, job] {
+    connect(job, &NetJob::failed, this, [this, logo, job] {
         job->deleteLater();
         logoFailed(logo);
     });

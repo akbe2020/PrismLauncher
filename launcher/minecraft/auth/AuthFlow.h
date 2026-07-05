@@ -2,10 +2,8 @@
 
 #include <QImage>
 #include <QList>
-#include <QNetworkReply>
 #include <QObject>
 #include <QSet>
-#include <QVector>
 
 #include "minecraft/auth/AccountData.h"
 #include "minecraft/auth/AuthStep.h"

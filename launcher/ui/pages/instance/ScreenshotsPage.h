@@ -37,17 +37,17 @@
 
 #include <QMainWindow>
 
-#include <Application.h>
 #include "ui/pages/BasePage.h"
 
 #include "settings/Setting.h"
 
-class QFileSystemModel;
 class QIdentityProxyModel;
 class QItemSelection;
 namespace Ui {
 class ScreenshotsPage;
 }
+
+class ScreenshotsFSModel;
 
 struct ScreenShot;
 class ScreenshotList;
@@ -67,7 +67,7 @@ class ScreenshotsPage : public QMainWindow, public BasePage {
 
     virtual bool eventFilter(QObject*, QEvent*) override;
     virtual QString displayName() const override { return tr("Screenshots"); }
-    virtual QIcon icon() const override { return APPLICATION->getThemedIcon("screenshots"); }
+    virtual QIcon icon() const override { return QIcon::fromTheme("screenshots"); }
     virtual QString id() const override { return "screenshots"; }
     virtual QString helpPage() const override { return "Screenshots-management"; }
     virtual bool apply() override { return !m_uploadActive; }
@@ -78,18 +78,18 @@ class ScreenshotsPage : public QMainWindow, public BasePage {
 
    private slots:
     void on_actionUpload_triggered();
-    void on_actionCopy_Image_triggered();
-    void on_actionCopy_File_s_triggered();
+    void on_actionCopy_Image_triggered() const;
+    void on_actionCopy_File_s_triggered() const;
     void on_actionDelete_triggered();
-    void on_actionRename_triggered();
-    void on_actionView_Folder_triggered();
-    void onItemActivated(QModelIndex);
-    void onCurrentSelectionChanged(const QItemSelection& selected);
-    void ShowContextMenu(const QPoint& pos);
+    void on_actionRename_triggered() const;
+    void on_actionView_Folder_triggered() const;
+    void onItemActivated(QModelIndex) const;
+    void onCurrentSelectionChanged(const QItemSelection& selected) const;
+    void showContextMenu(const QPoint& pos);
 
    private:
     Ui::ScreenshotsPage* ui;
-    std::shared_ptr<QFileSystemModel> m_model;
+    std::shared_ptr<ScreenshotsFSModel> m_model;
     std::shared_ptr<QIdentityProxyModel> m_filterModel;
     QString m_folder;
     bool m_valid = false;

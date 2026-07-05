@@ -79,6 +79,12 @@ Q_DECLARE_METATYPE(TaskStepProgress)
 
 using TaskStepProgressList = QList<std::shared_ptr<TaskStepProgress>>;
 
+/*!
+ * Represents a task that has to be done.
+ * To create a task, you need to subclass this class, implement the executeTask() method and call
+ * emitSucceeded() or emitFailed() when the task is done.
+ * the caller needs to call start() to start the task.
+ */
 class Task : public QObject, public QRunnable {
     Q_OBJECT
    public:
@@ -88,7 +94,7 @@ class Task : public QObject, public QRunnable {
 
    public:
     explicit Task(bool show_debug_log = true);
-    virtual ~Task() = default;
+    ~Task() override;
 
     bool isRunning() const;
     bool isFinished() const;
@@ -121,6 +127,9 @@ class Task : public QObject, public QRunnable {
 
     QUuid getUid() { return m_uid; }
 
+    // Copies the other task's status, details, progress, and step progress to this task; and sets up connections for future propagation
+    void propagateFromOther(Task* other);
+
    protected:
     void logWarning(const QString& line);
 
@@ -130,26 +139,33 @@ class Task : public QObject, public QRunnable {
    signals:
     void started();
     void progress(qint64 current, qint64 total);
+    //! called when a task has either succeeded, aborted or failed.
     void finished();
+    //! called when a task has succeeded
     void succeeded();
+    //! called when a task has been aborted by calling abort()
     void aborted();
     void failed(QString reason);
     void status(QString status);
     void details(QString details);
+    void warningLogged(const QString& warning);
     void stepProgress(TaskStepProgress const& task_progress);
 
-    /** Emitted when the canAbort() status has changed.
-     */
+    //! Emitted when the canAbort() status has changed. */
     void abortStatusChanged(bool can_abort);
+
+    void abortButtonTextChanged(QString text);
 
    public slots:
     // QRunnable's interface
     void run() override { start(); }
 
+    //! used by the task caller to start the task
     virtual void start();
+    //! used by external code to ask the task to abort
     virtual bool abort()
     {
-        if (canAbort())
+        if (canAbort() && isRunning())
             emitAborted();
         return canAbort();
     }
@@ -160,12 +176,22 @@ class Task : public QObject, public QRunnable {
         emit abortStatusChanged(can_abort);
     }
 
+    void setAbortButtonText(QString text)
+    {
+        emit abortButtonTextChanged(text);
+    }
+
    protected:
+    //! The task subclass must implement this method. This method is called to start to run the task.
+    //! The task is not finished when this method returns. the subclass must manually call emitSucceeded() or emitFailed() instead.
     virtual void executeTask() = 0;
 
    protected slots:
+    //! The Task subclass must call this method when the task has succeeded
     virtual void emitSucceeded();
+    //! **The Task subclass** must call this method when the task has aborted. External code should call abort() instead.
     virtual void emitAborted();
+    //! The Task subclass must call this method when the task has failed
     virtual void emitFailed(QString reason = "");
 
     virtual void propagateStepProgress(TaskStepProgress const& task_progress);

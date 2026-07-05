@@ -58,11 +58,11 @@ class ListModel : public QAbstractListModel {
     void getLogo(const QString& logo, const QString& logoUrl, LogoCallback callback);
     void searchWithTerm(const QString& term);
 
-    [[nodiscard]] bool hasActiveSearchJob() const { return jobPtr && jobPtr->isRunning(); }
-    [[nodiscard]] Task::Ptr activeSearchJob() { return hasActiveSearchJob() ? jobPtr : nullptr; }
+    bool hasActiveSearchJob() const { return jobPtr && jobPtr->isRunning(); }
+    Task::Ptr activeSearchJob() { return hasActiveSearchJob() ? jobPtr : nullptr; }
 
    private slots:
-    void searchRequestFinished();
+    void searchRequestFinished(QByteArray* responsePtr);
     void searchRequestFailed();
 
     void logoFailed(QString logo);
@@ -86,7 +86,6 @@ class ListModel : public QAbstractListModel {
         Single,
     } searchMode = List;
     NetJob::Ptr jobPtr;
-    std::shared_ptr<QByteArray> response = std::make_shared<QByteArray>();
 };
 
 }  // namespace Technic

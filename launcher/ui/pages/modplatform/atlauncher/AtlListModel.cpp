@@ -61,7 +61,7 @@ QVariant ListModel::data(const QModelIndex& index, int role) const
             if (m_logoMap.contains(pack.safeName)) {
                 return (m_logoMap.value(pack.safeName));
             }
-            auto icon = APPLICATION->getThemedIcon("atlauncher-placeholder");
+            auto icon = QIcon::fromTheme("atlauncher-placeholder");
 
             auto url = QString(BuildConfig.ATL_DOWNLOAD_SERVER_URL + "launcher/images/%1").arg(pack.safeName);
             ((ListModel*)this)->requestLogo(pack.safeName, url);
@@ -82,8 +82,6 @@ QVariant ListModel::data(const QModelIndex& index, int role) const
             return pack.name;
         case UserDataTypes::DESCRIPTION:
             return pack.description;
-        case UserDataTypes::SELECTED:
-            return false;
         case UserDataTypes::INSTALLED:
             return false;
         default:
@@ -101,23 +99,26 @@ void ListModel::request()
 
     auto netJob = makeShared<NetJob>("Atl::Request", APPLICATION->network());
     auto url = QString(BuildConfig.ATL_DOWNLOAD_SERVER_URL + "launcher/json/packsnew.json");
-    netJob->addNetAction(Net::ApiDownload::makeByteArray(QUrl(url), response));
+    auto [action, response] = Net::ApiDownload::makeByteArray(QUrl(url));
+    netJob->addNetAction(action);
     jobPtr = netJob;
     jobPtr->start();
 
-    QObject::connect(netJob.get(), &NetJob::succeeded, this, &ListModel::requestFinished);
-    QObject::connect(netJob.get(), &NetJob::failed, this, &ListModel::requestFailed);
+    connect(netJob.get(), &NetJob::succeeded, this, [this, response] { requestFinished(response); });
+    connect(netJob.get(), &NetJob::failed, this, &ListModel::requestFailed);
 }
 
-void ListModel::requestFinished()
+void ListModel::requestFinished(QByteArray* responsePtr)
 {
+    // NOTE(TheKodeToad): moving the response out to avoid it from being destroyed by jobPtr.reset()
+    QByteArray response = std::move(*responsePtr);
     jobPtr.reset();
 
     QJsonParseError parse_error;
-    QJsonDocument doc = QJsonDocument::fromJson(*response, &parse_error);
+    QJsonDocument doc = QJsonDocument::fromJson(response, &parse_error);
     if (parse_error.error != QJsonParseError::NoError) {
-        qWarning() << "Error while parsing JSON response from ATL at " << parse_error.offset << " reason: " << parse_error.errorString();
-        qWarning() << *response;
+        qWarning() << "Error while parsing JSON response from ATL at" << parse_error.offset << "reason:" << parse_error.errorString();
+        qWarning() << response;
         return;
     }
 
@@ -132,8 +133,8 @@ void ListModel::requestFinished()
         try {
             ATLauncher::loadIndexedPack(pack, packObj);
         } catch (const JSONValidationError& e) {
-            qDebug() << QString::fromUtf8(*response);
-            qWarning() << "Error while reading pack manifest from ATLauncher: " << e.cause();
+            qDebug() << QString::fromUtf8(response);
+            qWarning() << "Error while reading pack manifest from ATLauncher:" << e.cause();
             return;
         }
 
@@ -199,7 +200,7 @@ void ListModel::requestLogo(QString file, QString url)
     job->addNetAction(Net::ApiDownload::makeCached(QUrl(url), entry));
 
     auto fullPath = entry->getFullPath();
-    QObject::connect(job, &NetJob::succeeded, this, [this, file, fullPath, job] {
+    connect(job, &NetJob::succeeded, this, [this, file, fullPath, job] {
         job->deleteLater();
         emit logoLoaded(file, QIcon(fullPath));
         if (waitingCallbacks.contains(file)) {
@@ -207,7 +208,7 @@ void ListModel::requestLogo(QString file, QString url)
         }
     });
 
-    QObject::connect(job, &NetJob::failed, this, [this, file, job] {
+    connect(job, &NetJob::failed, this, [this, file, job] {
         job->deleteLater();
         emit logoFailed(file);
     });

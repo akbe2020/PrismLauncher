@@ -36,6 +36,7 @@
  */
 
 #include "FileSystem.h"
+#include <qcontainerfwd.h>
 #include <QPair>
 
 #include "BuildConfig.h"
@@ -59,10 +60,8 @@
 #if defined Q_OS_WIN32
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
-#include <objbase.h>
 #include <objidl.h>
 #include <shlguid.h>
-#include <shlobj.h>
 #include <shobjidl.h>
 #include <sys/utime.h>
 #include <versionhelpers.h>
@@ -77,24 +76,8 @@
 #include <utime.h>
 #endif
 
-// Snippet from https://github.com/gulrak/filesystem#using-it-as-single-file-header
-
-#ifdef __APPLE__
-#include <Availability.h>  // for deployment target to support pre-catalina targets without std::fs
-#endif                     // __APPLE__
-
-#if ((defined(_MSVC_LANG) && _MSVC_LANG >= 201703L) || (defined(__cplusplus) && __cplusplus >= 201703L)) && defined(__has_include)
-#if __has_include(<filesystem>) && (!defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || __MAC_OS_X_VERSION_MIN_REQUIRED >= 101500)
-#define GHC_USE_STD_FS
 #include <filesystem>
 namespace fs = std::filesystem;
-#endif  // MacOS min version check
-#endif  // Other OSes version check
-
-#ifndef GHC_USE_STD_FS
-#include <ghc/filesystem.hpp>
-namespace fs = ghc::filesystem;
-#endif
 
 // clone
 #if defined(Q_OS_LINUX)
@@ -123,6 +106,10 @@ namespace fs = ghc::filesystem;
 
 #if defined(__MINGW32__)
 
+// Avoid re-defining structs retroactively added to MinGW
+// https://github.com/mingw-w64/mingw-w64/issues/90#issuecomment-2829284729
+#if __MINGW64_VERSION_MAJOR < 13
+
 struct _DUPLICATE_EXTENTS_DATA {
     HANDLE FileHandle;
     LARGE_INTEGER SourceFileOffset;
@@ -132,6 +119,7 @@ struct _DUPLICATE_EXTENTS_DATA {
 
 using DUPLICATE_EXTENTS_DATA = _DUPLICATE_EXTENTS_DATA;
 using PDUPLICATE_EXTENTS_DATA = _DUPLICATE_EXTENTS_DATA*;
+#endif
 
 struct _FSCTL_GET_INTEGRITY_INFORMATION_BUFFER {
     WORD ChecksumAlgorithm;  // Checksum algorithm. e.g. CHECKSUM_TYPE_UNCHANGED, CHECKSUM_TYPE_NONE, CHECKSUM_TYPE_CRC32
@@ -295,6 +283,9 @@ bool copyFileAttributes(QString src, QString dst)
     if (attrs == INVALID_FILE_ATTRIBUTES)
         return false;
     return SetFileAttributesW(dst.toStdWString().c_str(), attrs);
+#else
+    Q_UNUSED(src);
+    Q_UNUSED(dst);
 #endif
     return true;
 }
@@ -342,7 +333,7 @@ bool copy::operator()(const QString& offset, bool dryRun)
 
     // Function that'll do the actual copying
     auto copy_file = [this, dryRun, src, dst, opt, &err](QString src_path, QString relative_dst_path) {
-        if (m_matcher && (m_matcher->matches(relative_dst_path) != m_whitelist))
+        if (m_matcher && (m_matcher(relative_dst_path) != m_whitelist))
             return;
 
         auto dst_path = PathCombine(dst, relative_dst_path);
@@ -429,7 +420,7 @@ void create_link::make_link_list(const QString& offset)
 
         // Function that'll do the actual linking
         auto link_file = [this, dst](QString src_path, QString relative_dst_path) {
-            if (m_matcher && (m_matcher->matches(relative_dst_path) != m_whitelist)) {
+            if (m_matcher && (m_matcher(relative_dst_path) != m_whitelist)) {
                 qDebug() << "path" << relative_dst_path << "in black list or not in whitelist";
                 return;
             }
@@ -445,7 +436,7 @@ void create_link::make_link_list(const QString& offset)
             link_file(src, "");
         } else {
             if (m_debug)
-                qDebug() << "linking recursively:" << src << "to" << dst << ", max_depth:" << m_max_depth;
+                qDebug().nospace() << "linking recursively: " << src << " to " << dst << ", max_depth: " << m_max_depth;
             QDir src_dir(src);
             QDirIterator source_it(src, QDir::Filter::Files | QDir::Filter::Hidden, QDirIterator::Subdirectories);
 
@@ -605,7 +596,7 @@ void create_link::runPrivileged(const QString& offset)
     }
 
     ExternalLinkFileProcess* linkFileProcess = new ExternalLinkFileProcess(serverName, m_useHardLinks, this);
-    connect(linkFileProcess, &ExternalLinkFileProcess::processExited, this, [this, gotResults]() { emit finishedPrivileged(gotResults); });
+    connect(linkFileProcess, &ExternalLinkFileProcess::processExited, this, [this, &gotResults]() { emit finishedPrivileged(gotResults); });
     connect(linkFileProcess, &ExternalLinkFileProcess::finished, linkFileProcess, &QObject::deleteLater);
 
     linkFileProcess->start();
@@ -693,11 +684,34 @@ bool deletePath(QString path)
     return err.value() == 0;
 }
 
+bool deleteContents(const QString& path)
+{
+    const QFileInfo info(path);
+    if (!info.exists()) {
+        return true;
+    }
+    if (!info.isDir()) {
+        qWarning() << "Attempted to delete contents of non-directory path:" << path;
+        return false;
+    }
+
+    bool ret = true;
+
+    for (const auto& entry : fs::directory_iterator(StringUtils::toStdString(path))) {
+        std::error_code err;
+
+        fs::remove_all(entry.path(), err);
+        if (err.value() != 0) {
+            qWarning().nospace() << "Could not delete directory entry " << entry.path() << ": " << QString::fromStdString(err.message());
+            ret = false;
+        }
+    }
+
+    return ret;
+}
+
 bool trash(QString path, QString* pathInTrash)
 {
-#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
-    return false;
-#else
     // FIXME: Figure out trash in Flatpak. Qt seemingly doesn't use the Trash portal
     if (DesktopServices::isFlatpak())
         return false;
@@ -706,7 +720,6 @@ bool trash(QString path, QString* pathInTrash)
         return false;
 #endif
     return QFile::moveToTrash(path, pathInTrash);
-#endif
 }
 
 QString PathCombine(const QString& path1, const QString& path2)
@@ -740,11 +753,7 @@ int pathDepth(const QString& path)
 
     QFileInfo info(path);
 
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-    auto parts = QDir::toNativeSeparators(info.path()).split(QDir::separator(), QString::SkipEmptyParts);
-#else
     auto parts = QDir::toNativeSeparators(info.path()).split(QDir::separator(), Qt::SkipEmptyParts);
-#endif
 
     int numParts = parts.length();
     numParts -= parts.count(".");
@@ -764,11 +773,7 @@ QString pathTruncate(const QString& path, int depth)
         return pathTruncate(trunc, depth);
     }
 
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-    auto parts = QDir::toNativeSeparators(trunc).split(QDir::separator(), QString::SkipEmptyParts);
-#else
     auto parts = QDir::toNativeSeparators(trunc).split(QDir::separator(), Qt::SkipEmptyParts);
-#endif
 
     if (parts.startsWith(".") && !path.startsWith(".")) {
         parts.removeFirst();
@@ -818,68 +823,33 @@ QString NormalizePath(QString path)
     }
 }
 
-static const QString BAD_WIN_CHARS = "<>:\"|?*\r\n";
-static const QString BAD_NTFS_CHARS = "<>:\"|?*";
-static const QString BAD_HFS_CHARS = ":";
-
-static const QString BAD_FILENAME_CHARS = BAD_WIN_CHARS + "\\/";
-
-QString RemoveInvalidFilenameChars(QString string, QChar replaceWith)
+namespace {
+const QString g_badChars = "<>:\"|?*\r\n!";
+QString removeChars(QString source, QChar replace, const QString& extraChars = "")
 {
-    for (int i = 0; i < string.length(); i++)
-        if (string.at(i) < ' ' || BAD_FILENAME_CHARS.contains(string.at(i)))
-            string[i] = replaceWith;
-    return string;
-}
-
-QString RemoveInvalidPathChars(QString path, QChar replaceWith)
-{
-    QString invalidChars;
-#ifdef Q_OS_WIN
-    invalidChars = BAD_WIN_CHARS;
-#endif
-
-    // the null character is ignored in this check as it was not a problem until now
-    switch (statFS(path).fsType) {
-        case FilesystemType::FAT:  // similar to NTFS
-        /* fallthrough */
-        case FilesystemType::NTFS:
-        /* fallthrough */
-        case FilesystemType::REFS:  // similar to NTFS(should be available only on windows)
-            invalidChars += BAD_NTFS_CHARS;
-            break;
-        // case FilesystemType::EXT:
-        // case FilesystemType::EXT_2_OLD:
-        // case FilesystemType::EXT_2_3_4:
-        // case FilesystemType::XFS:
-        // case FilesystemType::BTRFS:
-        // case FilesystemType::NFS:
-        // case FilesystemType::ZFS:
-        case FilesystemType::APFS:
-        /* fallthrough */
-        case FilesystemType::HFS:
-        /* fallthrough */
-        case FilesystemType::HFSPLUS:
-        /* fallthrough */
-        case FilesystemType::HFSX:
-            invalidChars += BAD_HFS_CHARS;
-            break;
-        // case FilesystemType::FUSEBLK:
-        // case FilesystemType::F2FS:
-        // case FilesystemType::UNKNOWN:
-        default:
-            break;
+    auto badChars = g_badChars;
+    if (!extraChars.isEmpty()) {
+        badChars += extraChars;
     }
 
-    if (invalidChars.size() != 0) {
-        for (int i = 0; i < path.length(); i++) {
-            if (path.at(i) < ' ' || invalidChars.contains(path.at(i))) {
-                path[i] = replaceWith;
-            }
+    for (auto& c : source) {
+        if (c.unicode() < 0x20 || !c.isPrint() || badChars.contains(c)) {
+            c = replace;
         }
     }
 
-    return path;
+    return source;
+}
+}  // namespace
+
+QString RemoveInvalidFilenameChars(QString string, QChar replaceWith)
+{
+    return removeChars(std::move(string), replaceWith, "\\/");
+}
+
+QString RemoveInvalidPathChars(QString string, QChar replaceWith)
+{
+    return removeChars(std::move(string), replaceWith);
 }
 
 QString DirNameFromString(QString string, QString inDir)
@@ -915,48 +885,70 @@ QString getDesktopDir()
     return QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
 }
 
+QString getApplicationsDir()
+{
+    return QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation);
+}
+
+QString quoteArgs(const QStringList& args, const QString& wrap, const QString& escapeChar, bool wrapOnlyIfNeeded = false)
+{
+    QString result;
+
+    auto size = args.size();
+    for (int i = 0; i < size; ++i) {
+        QString arg = args[i];
+        arg.replace(wrap, escapeChar);
+
+        bool needsWrapping = !wrapOnlyIfNeeded || arg.contains(' ') || arg.contains('\t') || arg.contains(wrap);
+
+        if (needsWrapping)
+            result += wrap + arg + wrap;
+        else
+            result += arg;
+
+        if (i < size - 1)
+            result += ' ';
+    }
+
+    return result;
+}
+
 // Cross-platform Shortcut creation
-bool createShortcut(QString destination, QString target, QStringList args, QString name, QString icon)
+QString createShortcut(QString destination, QString target, QStringList args, QString name, QString icon)
 {
     if (destination.isEmpty()) {
         destination = PathCombine(getDesktopDir(), RemoveInvalidFilenameChars(name));
     }
     if (!ensureFilePathExists(destination)) {
         qWarning() << "Destination path can't be created!";
-        return false;
+        return QString();
     }
 #if defined(Q_OS_MACOS)
-    // Create the Application
-    QDir applicationDirectory =
-        QStandardPaths::writableLocation(QStandardPaths::ApplicationsLocation) + "/" + BuildConfig.LAUNCHER_NAME + " Instances/";
-
-    if (!applicationDirectory.mkpath(".")) {
-        qWarning() << "Couldn't create application directory";
-        return false;
-    }
-
-    QDir application = applicationDirectory.path() + "/" + name + ".app/";
+    QDir application = destination + ".app/";
 
     if (application.exists()) {
         qWarning() << "Application already exists!";
-        return false;
+        return QString();
     }
 
     if (!application.mkpath(".")) {
         qWarning() << "Couldn't create application";
-        return false;
+        return QString();
     }
 
     QDir content = application.path() + "/Contents/";
     QDir resources = content.path() + "/Resources/";
     QDir binaryDir = content.path() + "/MacOS/";
-    QFile info = content.path() + "/Info.plist";
+    QFile info(content.path() + "/Info.plist");
 
     if (!(content.mkpath(".") && resources.mkpath(".") && binaryDir.mkpath("."))) {
         qWarning() << "Couldn't create directories within application";
-        return false;
+        return QString();
     }
-    info.open(QIODevice::WriteOnly | QIODevice::Text);
+    if (!info.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "Failed to open file" << info.fileName() << "for writing:" << info.errorString();
+        return QString();
+    }
 
     QFile(icon).rename(resources.path() + "/Icon.icns");
 
@@ -964,12 +956,13 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
     QString exec = binaryDir.path() + "/Run.command";
 
     QFile f(exec);
-    f.open(QIODevice::WriteOnly | QIODevice::Text);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "Failed to open file" << f.fileName() << "for writing:" << f.errorString();
+        return QString();
+    }
     QTextStream stream(&f);
 
-    QString argstring;
-    if (!args.empty())
-        argstring = " \"" + args.join("\" \"") + "\"";
+    auto argstring = quoteArgs(args, "\"", "\\\"");
 
     stream << "#!/bin/bash" << "\n";
     stream << "\"" << target << "\" " << argstring << "\n";
@@ -1003,22 +996,23 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
                   "</dict>\n"
                   "</plist>";
 
-    return true;
+    return application.path();
 #elif defined(Q_OS_LINUX) || defined(Q_OS_FREEBSD) || defined(Q_OS_OPENBSD)
     if (!destination.endsWith(".desktop"))  // in case of isFlatpak destination is already populated
         destination += ".desktop";
     QFile f(destination);
-    f.open(QIODevice::WriteOnly | QIODevice::Text);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qWarning() << "Failed to open file" << f.fileName() << "for writing:" << f.errorString();
+        return QString();
+    }
     QTextStream stream(&f);
 
-    QString argstring;
-    if (!args.empty())
-        argstring = " '" + args.join("' '") + "'";
+    auto argstring = quoteArgs(args, "'", "'\\''");
 
     stream << "[Desktop Entry]" << "\n";
     stream << "Type=Application" << "\n";
     stream << "Categories=Game;ActionGame;AdventureGame;Simulation" << "\n";
-    stream << "Exec=\"" << target.toLocal8Bit() << "\"" << argstring.toLocal8Bit() << "\n";
+    stream << "Exec=\"" << target.toLocal8Bit() << "\" " << argstring.toLocal8Bit() << "\n";
     stream << "Name=" << name.toLocal8Bit() << "\n";
     if (!icon.isEmpty()) {
         stream << "Icon=" << icon.toLocal8Bit() << "\n";
@@ -1029,51 +1023,38 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
 
     f.setPermissions(f.permissions() | QFileDevice::ExeOwner | QFileDevice::ExeGroup | QFileDevice::ExeOther);
 
-    return true;
+    return destination;
 #elif defined(Q_OS_WIN)
     QFileInfo targetInfo(target);
 
     if (!targetInfo.exists()) {
         qWarning() << "Target file does not exist!";
-        return false;
+        return QString();
     }
 
     target = targetInfo.absoluteFilePath();
 
     if (target.length() >= MAX_PATH) {
         qWarning() << "Target file path is too long!";
-        return false;
+        return QString();
     }
 
     if (!icon.isEmpty() && icon.length() >= MAX_PATH) {
         qWarning() << "Icon path is too long!";
-        return false;
+        return QString();
     }
 
     destination += ".lnk";
 
     if (destination.length() >= MAX_PATH) {
         qWarning() << "Destination path is too long!";
-        return false;
+        return QString();
     }
 
-    QString argStr;
-    int argCount = args.count();
-    for (int i = 0; i < argCount; i++) {
-        if (args[i].contains(' ')) {
-            argStr.append('"').append(args[i]).append('"');
-        } else {
-            argStr.append(args[i]);
-        }
-
-        if (i < argCount - 1) {
-            argStr.append(" ");
-        }
-    }
-
+    auto argStr = quoteArgs(args, "\"", "\\\"", true);
     if (argStr.length() >= MAX_PATH) {
         qWarning() << "Arguments string is too long!";
-        return false;
+        return QString();
     }
 
     HRESULT hres;
@@ -1082,7 +1063,7 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
     hres = CoInitialize(nullptr);
     if (FAILED(hres)) {
         qWarning() << "Failed to initialize COM!";
-        return false;
+        return QString();
     }
 
     WCHAR wsz[MAX_PATH];
@@ -1120,26 +1101,28 @@ bool createShortcut(QString destination, QString target, QStringList args, QStri
             hres = ppf->Save(wsz, TRUE);
             if (FAILED(hres)) {
                 qWarning() << "IPresistFile->Save() failed";
-                qWarning() << "hres = " << hres;
+                qWarning() << "hres =" << hres;
             }
             ppf->Release();
         } else {
             qWarning() << "Failed to query IPersistFile interface from IShellLink instance";
-            qWarning() << "hres = " << hres;
+            qWarning() << "hres =" << hres;
         }
         psl->Release();
     } else {
         qWarning() << "Failed to create IShellLink instance";
-        qWarning() << "hres = " << hres;
+        qWarning() << "hres =" << hres;
     }
 
     // go away COM, nobody likes you
     CoUninitialize();
 
-    return SUCCEEDED(hres);
+    if (SUCCEEDED(hres))
+        return destination;
+    return QString();
 #else
     qWarning("Desktop Shortcuts not supported on your platform!");
-    return false;
+    return QString();
 #endif
 }
 
@@ -1296,7 +1279,7 @@ bool clone::operator()(const QString& offset, bool dryRun)
 
     // Function that'll do the actual cloneing
     auto cloneFile = [this, dryRun, dst, &err](QString src_path, QString relative_dst_path) {
-        if (m_matcher && (m_matcher->matches(relative_dst_path) != m_whitelist))
+        if (m_matcher && (m_matcher(relative_dst_path) != m_whitelist))
             return;
 
         auto dst_path = PathCombine(dst, relative_dst_path);
@@ -1417,14 +1400,14 @@ bool win_ioctl_clone(const std::wstring& src_path, const std::wstring& dst_path,
     ULONG fs_flags;
     if (!GetVolumeInformationByHandleW(hSourceFile, nullptr, 0, nullptr, nullptr, &fs_flags, nullptr, 0)) {
         ec = std::error_code(GetLastError(), std::system_category());
-        qDebug() << "Failed to get Filesystem information for " << src_path.c_str();
+        qDebug() << "Failed to get Filesystem information for" << src_path.c_str();
         CloseHandle(hSourceFile);
         return false;
     }
     if (!(fs_flags & FILE_SUPPORTS_BLOCK_REFCOUNTING)) {
         SetLastError(ERROR_NOT_CAPABLE);
         ec = std::error_code(GetLastError(), std::system_category());
-        qWarning() << "Filesystem at " << src_path.c_str() << " does not support reflink";
+        qWarning() << "Filesystem at" << src_path.c_str() << "does not support reflink";
         CloseHandle(hSourceFile);
         return false;
     }
@@ -1719,5 +1702,15 @@ QString getUniqueResourceName(const QString& filePath)
     } while (QFile::exists(newFileName));
 
     return newFileName;
+}
+bool removeFiles(QStringList listFile)
+{
+    bool ret = true;
+    // For each file
+    for (int i = 0; i < listFile.count(); i++) {
+        // Remove
+        ret = ret && QFile::remove(listFile.at(i));
+    }
+    return ret;
 }
 }  // namespace FS

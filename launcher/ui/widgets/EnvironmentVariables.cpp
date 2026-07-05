@@ -50,6 +50,8 @@ EnvironmentVariables::EnvironmentVariables(QWidget* parent) : QWidget(parent), u
     });
 
     connect(ui->clear, &QPushButton::clicked, this, [this] { ui->list->clear(); });
+
+    connect(ui->overrideCheckBox, &QCheckBox::toggled, ui->settingsWidget, &QWidget::setEnabled);
 }
 
 EnvironmentVariables::~EnvironmentVariables()
@@ -60,8 +62,8 @@ EnvironmentVariables::~EnvironmentVariables()
 void EnvironmentVariables::initialize(bool instance, bool override, const QMap<QString, QVariant>& value)
 {
     // update widgets to settings
-    ui->groupBox->setCheckable(instance);
-    ui->groupBox->setChecked(override);
+    ui->overrideCheckBox->setVisible(instance);
+    ui->overrideCheckBox->setChecked(override);
 
     // populate
     ui->list->clear();
@@ -94,9 +96,7 @@ void EnvironmentVariables::retranslate()
 
 bool EnvironmentVariables::override() const
 {
-    if (!ui->groupBox->isCheckable())
-        return false;
-    return ui->groupBox->isChecked();
+    return ui->overrideCheckBox->isChecked();
 }
 
 QMap<QString, QVariant> EnvironmentVariables::value() const
@@ -104,7 +104,7 @@ QMap<QString, QVariant> EnvironmentVariables::value() const
     QMap<QString, QVariant> result;
     QTreeWidgetItem* item = ui->list->topLevelItem(0);
     for (int i = 1; item != nullptr; item = ui->list->topLevelItem(i++))
-        result[item->text(0)] = item->text(1);
+        result[item->text(0).trimmed()] = item->text(1).trimmed();
 
     return result;
 }

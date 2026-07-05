@@ -46,7 +46,7 @@ ExportToModListDialog::ExportToModListDialog(QString name, QList<Mod*> mods, QWi
     ui->setupUi(this);
     enableCustom(false);
 
-    connect(ui->formatComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ExportToModListDialog::formatChanged);
+    connect(ui->formatComboBox, &QComboBox::currentIndexChanged, this, &ExportToModListDialog::formatChanged);
     connect(ui->authorsCheckBox, &QCheckBox::stateChanged, this, &ExportToModListDialog::trigger);
     connect(ui->versionCheckBox, &QCheckBox::stateChanged, this, &ExportToModListDialog::trigger);
     connect(ui->urlCheckBox, &QCheckBox::stateChanged, this, &ExportToModListDialog::trigger);
@@ -213,6 +213,8 @@ void ExportToModListDialog::addExtra(ExportToModList::OptionalData option)
             break;
         case ExportToModList::FileName:
             ui->templateText->insertPlainText("{filename}");
+            break;
+        case ExportToModList::None:
             break;
     }
 }

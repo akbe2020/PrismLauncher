@@ -53,6 +53,9 @@
       <property name="rootIsDecorated">
        <bool>false</bool>
       </property>
+      <property name="verticalScrollMode">
+       <enum>QAbstractItemView::ScrollPerPixel</enum>
+      </property>
       <attribute name="headerStretchLastSection">
        <bool>false</bool>
       </attribute>
@@ -149,6 +152,8 @@
    <addaction name="actionMove_Up"/>
    <addaction name="actionMove_Down"/>
    <addaction name="actionJoin"/>
+   <addaction name="separator"/>
+   <addaction name="actionRefresh"/>
   </widget>
   <action name="actionAdd">
    <property name="text">
@@ -173,6 +178,11 @@
   <action name="actionJoin">
    <property name="text">
     <string>Join</string>
+   </property>
+  </action>
+  <action name="actionRefresh">
+   <property name="text">
+    <string>Refresh</string>
    </property>
   </action>
  </widget>

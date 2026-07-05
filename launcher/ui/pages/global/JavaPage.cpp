@@ -55,14 +55,13 @@
 #include "java/JavaUtils.h"
 
 #include <FileSystem.h>
-#include <sys.h>
 #include "Application.h"
 #include "settings/SettingsObject.h"
 
 JavaPage::JavaPage(QWidget* parent) : QWidget(parent), ui(new Ui::JavaPage)
 {
     ui->setupUi(this);
-    
+
     if (BuildConfig.JAVA_DOWNLOADER_ENABLED) {
         ui->managedJavaList->initialize(new JavaInstallList(this, true));
         ui->managedJavaList->setResizeOn(2);
